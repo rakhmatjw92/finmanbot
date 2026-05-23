@@ -289,10 +289,11 @@ app.delete('/api/transactions/:id', (req, res) => {
 // 5. Get Bot Status & Config
 app.get('/api/status', (req, res) => {
   const config = getBotConfig();
+  const isPolling = !config.webhookRegistered && !!config.telegramBotToken;
   res.json({
     telegramBotToken: config.telegramBotToken ? '••••••••' + config.telegramBotToken.slice(-5) : '',
     botUsername: config.botUsername || '',
-    webhookUrl: config.webhookUrl || '',
+    webhookUrl: config.webhookRegistered ? config.webhookUrl : (isPolling ? 'Polling active (localhost getUpdates mode)' : 'Not configured (check setup)'),
     webhookRegistered: config.webhookRegistered || false,
     isActive: config.isActive || false,
     appUrl: process.env.APP_URL || ''
@@ -317,12 +318,14 @@ app.post('/api/config', async (req, res) => {
     const botUsername = botData.result.username;
 
     // Register Webhook
-    const appUrl = process.env.APP_URL || '';
+    const appUrl = (process.env.APP_URL || '').trim();
     let webhookRegistered = false;
     let targetWebhookUrl = '';
 
-    if (appUrl) {
-      targetWebhookUrl = `${appUrl.trim().replace(/\/$/, '')}/api/telegram/webhook`;
+    const isLocal = !appUrl || appUrl.includes('localhost') || appUrl.includes('127.0.0.1');
+
+    if (appUrl && !isLocal) {
+      targetWebhookUrl = `${appUrl.replace(/\/$/, '')}/api/telegram/webhook`;
       const webhookRegUrl = `https://api.telegram.org/bot${token}/setWebhook?url=${encodeURIComponent(targetWebhookUrl)}`;
       const webRegRes = await fetch(webhookRegUrl);
       if (webRegRes.ok) {
@@ -331,6 +334,8 @@ app.post('/api/config', async (req, res) => {
       } else {
         console.error('Failed to register webhook with Telegram:', await webRegRes.text());
       }
+    } else {
+      console.log('Running on localhost/local environment. Setting up automatic long polling instead of webhook.');
     }
 
     const updatedConfig = updateBotConfig(token, botUsername, targetWebhookUrl, webhookRegistered);
@@ -338,7 +343,7 @@ app.post('/api/config', async (req, res) => {
       success: true,
       botUsername: updatedConfig.botUsername,
       webhookRegistered: updatedConfig.webhookRegistered,
-      webhookUrl: updatedConfig.webhookUrl
+      webhookUrl: updatedConfig.webhookRegistered ? updatedConfig.webhookUrl : 'Polling active (localhost getUpdates mode)'
     });
   } catch (err) {
     res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
@@ -415,13 +420,10 @@ app.post('/api/simulate', async (req, res) => {
   });
 });
 
-// 11. Telegram Webhook Endpoint
-app.post('/api/telegram/webhook', async (req, res) => {
-  const update = req.body;
-  console.log('Received Telegram Update:', JSON.stringify(update));
-
+// Reusable Telegram update processing engine (shared by Webhook + Polling)
+async function handleTelegramUpdate(update: any) {
   if (!update || !update.message) {
-    return res.sendStatus(200); // Always answer Telegram with 200 OK
+    return;
   }
 
   const message = update.message;
@@ -434,7 +436,7 @@ app.post('/api/telegram/webhook', async (req, res) => {
   const token = config.telegramBotToken;
 
   if (!token) {
-    return res.sendStatus(200);
+    return;
   }
 
   // Handle Command Commands
@@ -449,7 +451,7 @@ app.post('/api/telegram/webhook', async (req, res) => {
                     `<b>📊 Web Dashboard Link:</b>\n` +
                     `${process.env.APP_URL || 'Open the web application preview'}`;
     await sendTelegramMessage(token, chatId, welcome);
-    return res.sendStatus(200);
+    return;
   }
 
   // Handle Transaction logs
@@ -484,16 +486,114 @@ app.post('/api/telegram/webhook', async (req, res) => {
 
     await sendTelegramMessage(token, chatId, reply);
   } catch (err) {
-    console.error('Failed to parse or notify in Webhook:', err);
+    console.error('Failed to parse or notify in update handler:', err);
     await sendTelegramMessage(
       token,
       chatId,
       '⚠️ Oh no! Something went wrong while parsing with AI. Please make sure your transaction message has an amount!'
     );
   }
+}
+
+// 11. Telegram Webhook Endpoint
+app.post('/api/telegram/webhook', async (req, res) => {
+  const update = req.body;
+  console.log('Received Telegram Update via Webhook:', JSON.stringify(update));
+
+  if (update) {
+    // Fire and forget so we respond 200 OK immediately to Telegram
+    handleTelegramUpdate(update).catch(err => {
+      console.error('Error handling Telegram update in Webhook:', err);
+    });
+  }
 
   return res.sendStatus(200);
 });
+
+// 11b. Telegram getUpdates Long Polling Fallback (For Localhost development)
+let pollingActive = false;
+let currentPollingToken = '';
+let nextOffset = 0;
+
+async function runPollingLoop() {
+  if (pollingActive) return;
+  pollingActive = true;
+
+  console.log('🤖 Telegram Bot Long-Polling Engine Instantiated!');
+
+  while (true) {
+    try {
+      const config = getBotConfig();
+      const token = config.telegramBotToken;
+
+      if (!token) {
+        currentPollingToken = '';
+        await new Promise(resolve => setTimeout(resolve, 5000));
+        continue;
+      }
+
+      // If token changed or reset, reinitialize polling values
+      if (token !== currentPollingToken) {
+        console.log(`🤖 New bot token loaded. Initializing long poll adapter...`);
+        currentPollingToken = token;
+        nextOffset = 0;
+
+        try {
+          // Delete Webhook on Telegram side so getUpdates polling works without 409 Conflict
+          console.log('🤖 Clearing active Telegram webhooks to set up Long Polling...');
+          await fetch(`https://api.telegram.org/bot${token}/deleteWebhook`);
+          console.log('🤖 Active Telegram webhook cleared successfully');
+        } catch (e) {
+          console.error('🤖 Failed to clear active webhook on token change:', e);
+        }
+      }
+
+      // Automatically fetch botUsername if it is empty (e.g. from env loading flow)
+      if (!config.botUsername) {
+        try {
+          const verifyRes = await fetch(`https://api.telegram.org/bot${token}/getMe`);
+          if (verifyRes.ok) {
+            const verifyData = await verifyRes.json();
+            const botUsername = verifyData.result.username || '';
+            updateBotConfig(token, botUsername, config.webhookUrl, config.webhookRegistered);
+            console.log(`🤖 Auto-loaded bot handle from API: @${botUsername}`);
+          }
+        } catch (e) {
+          console.error('🤖 Failed to verify token or fetch credentials from getMe:', e);
+        }
+      }
+
+      // If webhook is indeed registered (e.g. in production), we bypass long-polling
+      if (config.webhookRegistered) {
+        await new Promise(resolve => setTimeout(resolve, 5000));
+        continue;
+      }
+
+      const url = `https://api.telegram.org/bot${token}/getUpdates?offset=${nextOffset}&timeout=10`;
+      const res = await fetch(url);
+      if (!res.ok) {
+        const errText = await res.text();
+        console.error(`🤖 getUpdates failed with status ${res.status}:`, errText);
+        await new Promise(resolve => setTimeout(resolve, 8000));
+        continue;
+      }
+
+      const data = await res.json();
+      if (data.ok && Array.isArray(data.result)) {
+        for (const update of data.result) {
+          nextOffset = update.update_id + 1;
+          await handleTelegramUpdate(update);
+        }
+      }
+    } catch (err) {
+      console.error('🤖 Network exception in polling cycle:', err);
+      await new Promise(resolve => setTimeout(resolve, 10000));
+    }
+
+    // Yield CPU
+    await new Promise(resolve => setTimeout(resolve, 100));
+  }
+}
 
 // 12. Export to CSV Link
 app.get('/api/export', (req, res) => {
@@ -533,6 +633,11 @@ async function startServer() {
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`Telegram Finance Bot Server running at http://0.0.0.0:${PORT}`);
     console.log(`Current environment: ${process.env.NODE_ENV || 'development'}`);
+
+    // Launch Telegram Long-Polling Fallback Engine in background
+    runPollingLoop().catch(err => {
+      console.error('🤖 Fail to start Telegram Long-Polling service:', err);
+    });
   });
 }
 
