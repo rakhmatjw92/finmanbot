@@ -1,0 +1,6 @@
+{
+  "name": "Telegram Finance Tracker",
+  "description": "A Telegram Bot and web-based financial dashboard for managing daily personal finances, powered by Gemini AI transaction parsing.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
