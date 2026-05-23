@@ -26,10 +26,43 @@ export interface BudgetConfig {
   currency: string;
 }
 
+export interface Receivable {
+  id: string;
+  customerName: string;
+  amount: number;
+  dueDate: string;
+  description: string;
+  status: 'unpaid' | 'paid' | 'overdue';
+  dateAdded: string;
+}
+
+export interface Debt {
+  id: string;
+  creditorName: string;
+  amount: number;
+  dueDate: string;
+  description: string;
+  interestRate: number; // percentage
+  status: 'active' | 'settled';
+  dateAdded: string;
+}
+
+export interface Equity {
+  id: string;
+  investorName: string;
+  capitalAmount: number;
+  sharesPercentage: number; // ownership percentage
+  description: string;
+  dateAdded: string;
+}
+
 export interface AppState {
   transactions: Transaction[];
   botConfig: BotConfig;
   budgetConfig: BudgetConfig;
+  receivables?: Receivable[];
+  debts?: Debt[];
+  equities?: Equity[];
 }
 
 export interface FinancialSummary {

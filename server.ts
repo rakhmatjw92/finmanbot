@@ -11,9 +11,20 @@ import {
   getBotConfig,
   updateBotConfig,
   getBudgetConfig,
-  updateBudgetConfig
+  updateBudgetConfig,
+  getReceivables,
+  addReceivable,
+  updateReceivableStatus,
+  deleteReceivable,
+  getDebts,
+  addDebt,
+  updateDebtStatus,
+  deleteDebt,
+  getEquities,
+  addEquity,
+  deleteEquity
 } from './src/server/db.js';
-import { Transaction, FinancialSummary } from './src/types.js';
+import { Transaction, FinancialSummary, Receivable, Debt, Equity } from './src/types.js';
 
 dotenv.config();
 
@@ -283,6 +294,119 @@ app.delete('/api/transactions/:id', (req, res) => {
     res.json({ success: true });
   } else {
     res.status(404).json({ error: 'Transaction not found' });
+  }
+});
+
+// 4b. Accounts Receivable REST Endpoints
+app.get('/api/receivables', (req, res) => {
+  res.json(getReceivables());
+});
+
+app.post('/api/receivables', (req, res) => {
+  const { customerName, amount, dueDate, description } = req.body;
+  if (!customerName || !amount || !dueDate) {
+    return res.status(400).json({ error: 'Missing required receivable fields' });
+  }
+  const item = addReceivable({
+    customerName,
+    amount: parseFloat(amount),
+    dueDate,
+    description: description || '',
+    status: 'unpaid'
+  });
+  res.json(item);
+});
+
+app.put('/api/receivables/:id', (req, res) => {
+  const { status } = req.body;
+  if (!status) {
+    return res.status(400).json({ error: 'Missing status payload' });
+  }
+  const success = updateReceivableStatus(req.params.id, status);
+  if (success) {
+    res.json({ success: true });
+  } else {
+    res.status(404).json({ error: 'Receivable record not found' });
+  }
+});
+
+app.delete('/api/receivables/:id', (req, res) => {
+  const success = deleteReceivable(req.params.id);
+  if (success) {
+    res.json({ success: true });
+  } else {
+    res.status(404).json({ error: 'Receivable record not found' });
+  }
+});
+
+// 4c. Debts REST Endpoints
+app.get('/api/debts', (req, res) => {
+  res.json(getDebts());
+});
+
+app.post('/api/debts', (req, res) => {
+  const { creditorName, amount, dueDate, description, interestRate } = req.body;
+  if (!creditorName || !amount || !dueDate) {
+    return res.status(400).json({ error: 'Missing required debt fields' });
+  }
+  const item = addDebt({
+    creditorName,
+    amount: parseFloat(amount),
+    dueDate,
+    description: description || '',
+    interestRate: parseFloat(interestRate) || 0,
+    status: 'active'
+  });
+  res.json(item);
+});
+
+app.put('/api/debts/:id', (req, res) => {
+  const { status } = req.body;
+  if (!status) {
+    return res.status(400).json({ error: 'Missing status payload' });
+  }
+  const success = updateDebtStatus(req.params.id, status);
+  if (success) {
+    res.json({ success: true });
+  } else {
+    res.status(404).json({ error: 'Debt record not found' });
+  }
+});
+
+app.delete('/api/debts/:id', (req, res) => {
+  const success = deleteDebt(req.params.id);
+  if (success) {
+    res.json({ success: true });
+  } else {
+    res.status(404).json({ error: 'Debt record not found' });
+  }
+});
+
+// 4d. Equities REST Endpoints
+app.get('/api/equities', (req, res) => {
+  res.json(getEquities());
+});
+
+app.post('/api/equities', (req, res) => {
+  const { investorName, capitalAmount, sharesPercentage, description } = req.body;
+  if (!investorName || !capitalAmount) {
+    return res.status(400).json({ error: 'Missing required equity fields' });
+  }
+  const item = addEquity({
+    investorName,
+    capitalAmount: parseFloat(capitalAmount),
+    sharesPercentage: parseFloat(sharesPercentage) || 0,
+    description: description || ''
+  });
+  res.json(item);
+});
+
+app.delete('/api/equities/:id', (req, res) => {
+  const success = deleteEquity(req.params.id);
+  if (success) {
+    res.json({ success: true });
+  } else {
+    res.status(404).json({ error: 'Equity record not found' });
   }
 });
 
